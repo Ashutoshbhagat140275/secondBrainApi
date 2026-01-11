@@ -94,6 +94,8 @@ def classify_emotion(mfcc_features: List[float]) -> Tuple[str, float]:
     
     return emotion, confidence
 
+    
+
 
 # Placeholder for model loading (implement when you have a trained model)
 def load_emotion_model(model_path: str):
