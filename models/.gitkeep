@@ -1,0 +1,4 @@
+# Placeholder — trained model artifacts go here.
+# Run the training pipeline to populate:
+#   emotion_model.pt
+#   feature_scaler.joblib

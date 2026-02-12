@@ -5,18 +5,23 @@ from app.config import settings
 from app.db.mongodb import get_database
 from app.models.user import User
 from typing import Optional
+import bcrypt
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against its hash"""
-    return pwd_context.verify(plain_password, hashed_password)
-
+def verify_password(password: str, hashed_password: str) -> bool:
+    return bcrypt.checkpw(
+        password.encode("utf-8"),
+        hashed_password.encode("utf-8")
+    )
 
 def get_password_hash(password: str) -> str:
-    """Hash a password"""
-    return pwd_context.hash(password)
+    hashed = bcrypt.hashpw(
+        password.encode("utf-8"),
+        bcrypt.gensalt()
+    )
+    return hashed.decode("utf-8")
 
 
 def create_access_token(data: dict) -> str:
@@ -50,15 +55,19 @@ async def authenticate_user(email: str, password: str) -> Optional[User]:
 async def create_user(email: str, password: str) -> User:
     """Create a new user"""
     db = get_database()
+    print("before the get_collection")
     user_collection = User.get_collection(db)
     
     # Check if user already exists
+    print("before the user call")
     existing_user = user_collection.find_one({"email": email})
     if existing_user:
         raise ValueError("User with this email already exists")
     
     # Create new user
+    print("about to create the password")
     password_hash = get_password_hash(password)
+    print("password created successful")
     user = User(email=email, password_hash=password_hash)
     
     # Insert into database

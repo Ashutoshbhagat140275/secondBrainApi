@@ -57,12 +57,14 @@ logs/
 .DS_Store
 Thumbs.db
 
-# Model files (if storing locally)
-*.pkl
-*.h5
-*.pt
-*.pth
-models/
+# Model files — track small artifacts, ignore large ones
+# models/          ← we WANT to track emotion_model.pt and feature_scaler.joblib
+models/*.pkl
+models/*.h5
+
+# Training data (large datasets — download separately)
+training/data/
+training/cache/
 
 # Jupyter
 .ipynb_checkpoints/

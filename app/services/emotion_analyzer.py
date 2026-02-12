@@ -1,110 +1,131 @@
+"""
+Emotion classification service — DNN-based inference.
+
+Loads a pre-trained PyTorch MLP (``EmotionMLP``) and a fitted
+``StandardScaler`` at first use, then runs inference on the 419-dim
+feature vector produced by ``feature_extractor.extract_full_features()``.
+
+If the model artifacts have not been trained yet, a warning is logged
+and a safe fallback ("neutral", 0.5) is returned so the application
+does not crash.
+"""
+
 import numpy as np
-import librosa
-from typing import Tuple, List
+import torch
+import torch.nn.functional as F
+import joblib
 import logging
+from typing import Tuple, List, Optional
+from pathlib import Path
+
+from app.services.feature_config import (
+    FEATURE_DIM,
+    NUM_CLASSES,
+    EMOTION_LABELS,
+    MODEL_PATH,
+    SCALER_PATH,
+)
 
 logger = logging.getLogger(__name__)
 
+# ── module-level singletons (loaded once) ─────────────────────────────────
+_emotion_model: Optional[torch.nn.Module] = None
+_feature_scaler = None  # sklearn StandardScaler
 
-def extract_mfcc_features(audio_path: str, n_mfcc: int = 13) -> Tuple[np.ndarray, List[float]]:
+
+def load_emotion_model() -> bool:
     """
-    Extract MFCC features from audio file
-    
-    Args:
-        audio_path: Path to audio file
-        n_mfcc: Number of MFCC coefficients to extract
-    
-    Returns:
-        Tuple of (mfcc_features array, aggregated_features list)
+    Load the trained MLP and feature scaler from disk.
+
+    Called once — either explicitly at app startup or lazily on first
+    ``classify_emotion()`` call.
+
+    Returns True if artifacts were loaded successfully, False otherwise.
     """
-    try:
-        # Load audio file
-        y, sr = librosa.load(audio_path, sr=22050)
-        
-        # Extract MFCC features
-        mfccs = librosa.feature.mfcc(
-            y=y,
-            sr=sr,
-            n_mfcc=n_mfcc,
-            n_fft=2048,
-            hop_length=512,
-            n_mels=128
+    global _emotion_model, _feature_scaler
+
+    model_path = Path(MODEL_PATH)
+    scaler_path = Path(SCALER_PATH)
+
+    if not model_path.exists():
+        logger.warning(
+            f"Emotion model not found at {model_path}. "
+            "classify_emotion() will use fallback predictions. "
+            "Run the training pipeline first."
         )
-        
-        # Aggregate features (mean and std across time)
-        mfcc_mean = np.mean(mfccs, axis=1)
-        mfcc_std = np.std(mfccs, axis=1)
-        
-        # Combine mean and std
-        aggregated_features = np.concatenate([mfcc_mean, mfcc_std]).tolist()
-        
-        return mfccs, aggregated_features
-    
+        return False
+
+    if not scaler_path.exists():
+        logger.warning(
+            f"Feature scaler not found at {scaler_path}. "
+            "classify_emotion() will use fallback predictions."
+        )
+        return False
+
+    try:
+        # Lazy import to avoid circular dependency at module level
+        from training.model import EmotionMLP
+
+        model = EmotionMLP(input_dim=FEATURE_DIM, num_classes=NUM_CLASSES)
+        state = torch.load(str(model_path), map_location="cpu", weights_only=True)
+        model.load_state_dict(state)
+        model.eval()
+        _emotion_model = model
+
+        _feature_scaler = joblib.load(str(scaler_path))
+
+        logger.info("Emotion model and scaler loaded successfully.")
+        return True
     except Exception as e:
-        logger.error(f"Error extracting MFCC features: {e}")
-        raise
+        logger.error(f"Failed to load emotion model: {e}", exc_info=True)
+        _emotion_model = None
+        _feature_scaler = None
+        return False
 
 
-def classify_emotion(mfcc_features: List[float]) -> Tuple[str, float]:
+def classify_emotion(features: List[float]) -> Tuple[str, float]:
     """
-    Classify emotion from MFCC features
-    
-    This is a placeholder implementation. In production, you would:
-    1. Load a pre-trained model (scikit-learn or TensorFlow)
-    2. Use the model to predict emotion from MFCC features
-    
-    For now, we'll use a simple rule-based approach as a placeholder.
-    In production, replace this with your trained model.
-    
-    Args:
-        mfcc_features: Aggregated MFCC features (26 dims: 13 mean + 13 std)
-    
-    Returns:
-        Tuple of (emotion_label, confidence)
+    Predict the most likely emotion label from a feature vector.
+
+    Parameters
+    ----------
+    features : List[float]
+        Full 419-dimensional feature vector produced by
+        ``feature_extractor.extract_full_features()``.
+
+    Returns
+    -------
+    (emotion_label, confidence) : Tuple[str, float]
+        The predicted emotion string and its softmax probability.
     """
-    # Placeholder: Simple rule-based classification
-    # In production, replace with actual trained model
-    
-    # Normalize features
-    features = np.array(mfcc_features)
-    logger.info(f"features {features}")
-    features = (features - np.mean(features)) / (np.std(features) + 1e-8)
-    
-    # Simple heuristic (replace with actual model)
-    # Higher energy in lower frequencies might indicate different emotions
-    energy = np.sum(np.abs(features[:13]))  # Mean MFCCs
-    
-    emotions = ["happy", "sad", "angry", "neutral", "fearful", "surprised", "disgusted"]
-    
-    # Placeholder logic (replace with actual model prediction)
-    if energy > 0.5:
-        emotion = "happy"
-        confidence = 0.75
-    elif energy < -0.5:
-        emotion = "sad"
-        confidence = 0.70
-    elif abs(energy) < 0.2:
-        emotion = "neutral"
-        confidence = 0.80
-    else:
-        emotion = "neutral"
-        confidence = 0.65
-    
-    logger.info(f"Emotion classified: {emotion} (confidence: {confidence})")
-    
-    return emotion, confidence
+    global _emotion_model, _feature_scaler
 
-    
+    # Lazy-load on first call if not yet initialised
+    if _emotion_model is None:
+        load_emotion_model()
 
+    # Fallback if model is still unavailable
+    if _emotion_model is None or _feature_scaler is None:
+        logger.warning("Emotion model unavailable — returning fallback prediction.")
+        return ("neutral", 0.5)
 
-# Placeholder for model loading (implement when you have a trained model)
-def load_emotion_model(model_path: str):
-    """
-    Load pre-trained emotion classification model
-    
-    Example implementation:
-    from sklearn.externals import joblib
-    return joblib.load(model_path)
-    """
-    pass
+    try:
+        # Normalise with the same scaler used during training
+        x = np.array(features, dtype=np.float32).reshape(1, -1)
+        x = _feature_scaler.transform(x)
+        tensor = torch.from_numpy(x.astype(np.float32))
 
+        with torch.no_grad():
+            logits = _emotion_model(tensor)  # (1, NUM_CLASSES)
+            probs = F.softmax(logits, dim=1)[0]  # (NUM_CLASSES,)
+
+        idx = int(torch.argmax(probs).item())
+        label = EMOTION_LABELS[idx]
+        confidence = float(probs[idx].item())
+
+        logger.info(f"Emotion classified: {label} (confidence: {confidence:.3f})")
+        return (label, confidence)
+
+    except Exception as e:
+        logger.error(f"Emotion classification failed: {e}", exc_info=True)
+        return ("neutral", 0.5)

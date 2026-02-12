@@ -12,6 +12,7 @@ router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 async def register(user_data: UserRegister):
     """Register a new user"""
     try:
+        print("inside the auth router")
         user = await create_user(user_data.email, user_data.password)
         return RegisterResponse(
             message="User registered successfully",
