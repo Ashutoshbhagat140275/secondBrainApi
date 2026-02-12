@@ -40,8 +40,10 @@ from app.services.feature_config import (
     MODEL_DIR,
     EMBEDDING_CLASSIFIER_PATH,
     EMBEDDING_SCALER_PATH,
+    GLOBAL_HEAD_PATH,
 )
 from app.services.emotion_classifier import EmbeddingClassifier
+from app.services.global_emotion_head import GlobalEmotionHead
 from app.services.wav2vec2_encoder import (
     load_wav2vec2_model,
     extract_wav2vec2_embedding,
@@ -164,6 +166,7 @@ def train(
     test_ratio: float = 0.15,
     seed: int = 42,
     force_recompute: bool = False,
+    save_as_global_head: bool = False,
 ):
     """
     Train the EmbeddingClassifier on Wav2Vec2 embeddings.
@@ -188,6 +191,8 @@ def train(
         Random seed for reproducibility
     force_recompute : bool
         If True, recompute embeddings even if cache exists
+    save_as_global_head : bool
+        If True, train and save as global_emotion_head.pt with simplified architecture
     """
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -260,9 +265,24 @@ def train(
     print("STEP 5: Initializing model")
     print("=" * 70)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = EmbeddingClassifier(embedding_dim=EMBEDDING_DIM, num_classes=NUM_CLASSES).to(device)
+    
+    # Choose model architecture based on flag
+    if save_as_global_head:
+        model = GlobalEmotionHead(embedding_dim=EMBEDDING_DIM, num_classes=NUM_CLASSES).to(device)
+        model_type = "GlobalEmotionHead (Linear 768→8)"
+        save_path = GLOBAL_HEAD_PATH
+        print("Training GLOBAL HEAD for dual-head emotion recognition system")
+        print(f"Architecture: Simple linear classifier (768 → 8)")
+    else:
+        model = EmbeddingClassifier(embedding_dim=EMBEDDING_DIM, num_classes=NUM_CLASSES).to(device)
+        model_type = "EmbeddingClassifier"
+        save_path = EMBEDDING_CLASSIFIER_PATH
+        print("Training standard EmbeddingClassifier (backward compatibility mode)")
+    
+    print(f"Model type: {model_type}")
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     print(f"Device: {device}")
+    print(f"Save path: {save_path}")
 
     class_weights = compute_class_weights(y_train, NUM_CLASSES).to(device)
     print(f"Class weights: {class_weights.cpu().numpy()}")
@@ -334,7 +354,7 @@ def train(
             best_val_loss = val_loss
             best_val_acc = val_acc
             epochs_no_improve = 0
-            torch.save(model.state_dict(), str(EMBEDDING_CLASSIFIER_PATH))
+            torch.save(model.state_dict(), str(save_path))
             print(f"  ✓ Saved best model (val_acc={val_acc:.3f})")
         else:
             epochs_no_improve += 1
@@ -351,19 +371,23 @@ def train(
     print("=" * 70)
     joblib.dump(scaler, str(EMBEDDING_SCALER_PATH))
     print(f"Saved scaler to {EMBEDDING_SCALER_PATH}")
-    print(f"Saved model to {EMBEDDING_CLASSIFIER_PATH}")
+    print(f"Saved model to {save_path}")
 
     # ── final summary ─────────────────────────────────────────────────
     print("\n" + "=" * 70)
     print("TRAINING COMPLETE")
     print("=" * 70)
+    print(f"Model type: {model_type}")
     print(f"Best validation loss: {best_val_loss:.4f}")
     print(f"Best validation accuracy: {best_val_acc:.3f}")
     print(f"\nModel artifacts:")
-    print(f"  - Classifier: {EMBEDDING_CLASSIFIER_PATH}")
+    print(f"  - Classifier: {save_path}")
     print(f"  - Scaler: {EMBEDDING_SCALER_PATH}")
     print(f"  - Test set: {FEATURES_CACHE_DIR / 'X_test_embeddings.npy'}")
     print(f"  - Embeddings cache: {cache_path}")
+    if save_as_global_head:
+        print(f"\n✓ Global head trained successfully for dual-head emotion recognition system")
+        print(f"  This model will serve as the shared baseline classifier for all users.")
     print("=" * 70)
 
 
@@ -386,6 +410,11 @@ def main():
         action="store_true",
         help="Recompute embeddings even if cache exists",
     )
+    parser.add_argument(
+        "--save-as-global-head",
+        action="store_true",
+        help="Train and save as global_emotion_head.pt with simplified Linear(768→8) architecture for dual-head system",
+    )
     args = parser.parse_args()
 
     train(
@@ -395,6 +424,7 @@ def main():
         patience=args.patience,
         seed=args.seed,
         force_recompute=args.force_recompute,
+        save_as_global_head=args.save_as_global_head,
     )
 
 

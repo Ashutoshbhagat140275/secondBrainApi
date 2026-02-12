@@ -72,8 +72,16 @@ _API_ROOT = Path(__file__).resolve().parents[2]  # …/api/
 MODEL_DIR = _API_ROOT / "models"
 
 # Embedding-based classifier artifacts (Wav2Vec2 pipeline)
+# Phase 1: Single shared classifier (legacy)
 EMBEDDING_CLASSIFIER_PATH = MODEL_DIR / "embedding_classifier.pt"
 EMBEDDING_SCALER_PATH = MODEL_DIR / "embedding_scaler.joblib"
+
+# Phase 2: Dual-head emotion recognition system
+# Global head: Shared classifier trained on public datasets (RAVDESS + CREMA-D)
+# User heads: Per-user personalized classifiers trained on individual feedback
+GLOBAL_HEAD_PATH = MODEL_DIR / "global_emotion_head.pt"
+USER_HEADS_DIR = MODEL_DIR / "user_heads"
+USER_HEAD_CACHE_SIZE = 100  # Max number of user models to keep in memory (LRU)
 
 # Training data directories (user must download datasets here)
 TRAINING_DATA_DIR = _API_ROOT / "training" / "data"
