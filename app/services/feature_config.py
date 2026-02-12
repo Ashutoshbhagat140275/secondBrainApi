@@ -2,7 +2,7 @@
 Centralized configuration for the emotion classification feature pipeline.
 
 This module is the single source of truth for:
-- Feature vector dimensionality
+- Neural embedding dimensionality (Wav2Vec2)
 - Emotion class labels and mappings
 - Audio processing constants
 - Model artifact paths
@@ -18,48 +18,12 @@ from pathlib import Path
 # Audio processing constants
 # ---------------------------------------------------------------------------
 SAMPLE_RATE = 16000  # Hz — must match preprocess_audio() output
-N_MFCC = 13  # Number of MFCC coefficients
-N_FFT = 2048  # FFT window size
-HOP_LENGTH = 512  # Hop length for STFT
-N_MELS = 128  # Number of mel bands
-N_CONTRAST_BANDS = 6  # For spectral contrast (produces n_bands + 1 rows)
 
 # ---------------------------------------------------------------------------
-# Feature vector layout
+# Neural embedding constants (Wav2Vec2)
 # ---------------------------------------------------------------------------
-# Each "row" feature is summarised via 8 functionals:
-#   [mean, std, min, max, p10, p50, p90, slope]
-FUNCTIONALS_PER_ROW = 8
-
-# Counts of row-level features
-MFCC_ROWS = N_MFCC  # 13
-DELTA_ROWS = N_MFCC  # 13
-DELTA2_ROWS = N_MFCC  # 13
-RMS_ROWS = 1  # 1
-F0_ROWS = 1  # 1
-CENTROID_ROWS = 1  # 1
-BANDWIDTH_ROWS = 1  # 1
-ZCR_ROWS = 1  # 1  (NEW)
-ROLLOFF_ROWS = 1  # 1  (NEW)
-CONTRAST_ROWS = N_CONTRAST_BANDS + 1  # 7  (NEW)
-
-# Scalar features (not summarised with functionals)
-SCALAR_FEATURES = 3  # jitter, shimmer, HNR
-
-FEATURE_DIM = (
-    MFCC_ROWS
-    + DELTA_ROWS
-    + DELTA2_ROWS
-    + RMS_ROWS
-    + F0_ROWS
-    + CENTROID_ROWS
-    + BANDWIDTH_ROWS
-    + ZCR_ROWS
-    + ROLLOFF_ROWS
-    + CONTRAST_ROWS
-) * FUNCTIONALS_PER_ROW + SCALAR_FEATURES
-# = (13+13+13 + 1+1+1+1 + 1+1+7) * 8 + 3
-# = 52 * 8 + 3 = 416 + 3 = 419
+EMBEDDING_DIM = 768  # Wav2Vec2-base output dimension
+WAV2VEC2_MODEL_NAME = "facebook/wav2vec2-base"
 
 # ---------------------------------------------------------------------------
 # Emotion labels
@@ -106,8 +70,10 @@ CREMAD_CODE_TO_IDX = {
 _API_ROOT = Path(__file__).resolve().parents[2]  # …/api/
 
 MODEL_DIR = _API_ROOT / "models"
-MODEL_PATH = MODEL_DIR / "emotion_model.pt"
-SCALER_PATH = MODEL_DIR / "feature_scaler.joblib"
+
+# Embedding-based classifier artifacts (Wav2Vec2 pipeline)
+EMBEDDING_CLASSIFIER_PATH = MODEL_DIR / "embedding_classifier.pt"
+EMBEDDING_SCALER_PATH = MODEL_DIR / "embedding_scaler.joblib"
 
 # Training data directories (user must download datasets here)
 TRAINING_DATA_DIR = _API_ROOT / "training" / "data"

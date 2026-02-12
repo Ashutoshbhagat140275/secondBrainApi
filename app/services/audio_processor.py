@@ -4,8 +4,8 @@ from fastapi import UploadFile
 from datetime import datetime
 
 from app.config import settings
-from app.services.emotion_analyzer import classify_emotion
-from app.services.feature_extractor import extract_full_features
+from app.services.wav2vec2_encoder import extract_wav2vec2_embedding
+from app.services.emotion_classifier import classify_emotion_from_embedding
 from app.services.transcription import transcribe_audio
 from app.services.vector_store import store_document
 from app.services.query_cache import invalidate_user_cache
@@ -16,6 +16,7 @@ import logging
 import librosa
 import numpy as np
 import soundfile as sf
+import time
 
 
 logger = logging.getLogger(__name__)
@@ -102,9 +103,9 @@ async def process_audio(user_id: str, audio_file: UploadFile) -> dict:
 
     Steps:
       1. Validate → save → preprocess (16 kHz, VAD, normalise)
-      2. Extract 419-dim feature vector  (feature_extractor.py)
-      3. Classify emotion via MLP        (emotion_analyzer.py)
-      4. Transcribe via Whisper           (transcription.py)
+      2. Extract 768-dim Wav2Vec2 embedding  (wav2vec2_encoder.py)
+      3. Classify emotion via neural head     (emotion_classifier.py)
+      4. Transcribe via Whisper              (transcription.py)
       5. Persist to MongoDB + Qdrant
 
     Returns
@@ -122,15 +123,19 @@ async def process_audio(user_id: str, audio_file: UploadFile) -> dict:
         # Step 3: Preprocess (resample, VAD, normalise)
         audio_path = await preprocess_audio(audio_path)
 
-        # Step 4: Extract features (419-dim vector)
-        logger.info("Extracting features...")
-        aggregated_features = extract_full_features(audio_path)
-        logger.info(f"Feature vector length: {len(aggregated_features)}")
+        # Step 4: Extract Wav2Vec2 embedding (768-dim vector)
+        logger.info("Extracting Wav2Vec2 embedding...")
+        start_time = time.time()
+        embedding = extract_wav2vec2_embedding(audio_path)
+        embedding_time = time.time() - start_time
+        logger.info(f"Embedding extraction completed in {embedding_time:.2f}s (shape: {embedding.shape})")
 
-        # Step 5: Classify emotion
-        logger.info("Classifying emotion...")
-        emotion_label, confidence = classify_emotion(aggregated_features)
-        logger.info(f"Emotion: {emotion_label} ({confidence:.2f})")
+        # Step 5: Classify emotion from embedding
+        logger.info("Classifying emotion from embedding...")
+        start_time = time.time()
+        emotion_label, confidence = classify_emotion_from_embedding(embedding)
+        classification_time = time.time() - start_time
+        logger.info(f"Emotion: {emotion_label} ({confidence:.2f}) - Classification time: {classification_time:.2f}s")
 
         # Step 6: Transcribe audio
         logger.info("Transcribing audio...")
@@ -167,13 +172,13 @@ async def process_audio(user_id: str, audio_file: UploadFile) -> dict:
         logger.info("Invalidating query cache for user...")
         await invalidate_user_cache(user_id)
 
-        # Step 9: Store emotion analysis
+        # Step 9: Store emotion analysis (embedding stored in mfcc_features field)
         emotion_analysis = EmotionAnalysis(
             user_id=user_id,
             session_id=session_id,
             emotion_label=emotion_label,
             confidence=confidence,
-            mfcc_features=aggregated_features,
+            mfcc_features=embedding.tolist(),  # Store 768-dim embedding
         )
         emotion_collection = EmotionAnalysis.get_collection(db)
         emotion_collection.insert_one(emotion_analysis.to_dict())
