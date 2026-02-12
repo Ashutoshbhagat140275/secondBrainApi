@@ -10,6 +10,7 @@ class User:
         email: str,
         password_hash: str,
         feedback_count: int = 0,
+        is_admin: bool = False,
         created_at: Optional[datetime] = None,
         _id: Optional[ObjectId] = None
     ):
@@ -17,6 +18,7 @@ class User:
         self.email = email
         self.password_hash = password_hash
         self.feedback_count = feedback_count
+        self.is_admin = is_admin
         self.created_at = created_at or datetime.utcnow()
     
     def to_dict(self):
@@ -25,6 +27,7 @@ class User:
             "email": self.email,
             "password_hash": self.password_hash,
             "feedback_count": self.feedback_count,
+            "is_admin": self.is_admin,
             "created_at": self.created_at
         }
     
@@ -35,6 +38,7 @@ class User:
             email=data["email"],
             password_hash=data["password_hash"],
             feedback_count=data.get("feedback_count", 0),
+            is_admin=data.get("is_admin", False),
             created_at=data.get("created_at")
         )
     

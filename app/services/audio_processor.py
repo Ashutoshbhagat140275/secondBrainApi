@@ -6,12 +6,15 @@ from datetime import datetime
 from app.config import settings
 from app.services.wav2vec2_encoder import extract_wav2vec2_embedding
 from app.services.emotion_classifier import classify_emotion_from_embedding
+from app.services.dual_head_classifier import classify_with_dual_heads
 from app.services.transcription import transcribe_audio
 from app.services.vector_store import store_document
 from app.services.query_cache import invalidate_user_cache
 from app.db.mongodb import get_database
 from app.models.audio import AudioSession
 from app.models.emotion import EmotionAnalysis
+from app.models.user import User
+from bson import ObjectId
 import logging
 import librosa
 import numpy as np
@@ -99,18 +102,29 @@ async def preprocess_audio(audio_path: str) -> str:
 
 async def process_audio(user_id: str, audio_file: UploadFile) -> dict:
     """
-    Complete audio processing pipeline.
+    Complete audio processing pipeline with dual-head emotion classification.
 
     Steps:
       1. Validate → save → preprocess (16 kHz, VAD, normalise)
       2. Extract 768-dim Wav2Vec2 embedding  (wav2vec2_encoder.py)
-      3. Classify emotion via neural head     (emotion_classifier.py)
-      4. Transcribe via Whisper              (transcription.py)
-      5. Persist to MongoDB + Qdrant
+      3. Query user feedback count for dual-head classification
+      4. Classify emotion via dual-head classifier (dual_head_classifier.py)
+      5. Transcribe via Whisper              (transcription.py)
+      6. Persist to MongoDB + Qdrant
 
     Returns
     -------
-    dict with keys: session_id, emotion, confidence, transcription, timestamp
+    dict with keys:
+        - session_id: str
+        - emotion: str (final blended prediction)
+        - confidence: float (final confidence)
+        - global_emotion: str (global head prediction)
+        - global_confidence: float (global head confidence)
+        - user_emotion: str | None (user head prediction, None if not available)
+        - user_confidence: float | None (user head confidence, None if not available)
+        - blend_weight: float (alpha value used for blending)
+        - transcription: str
+        - timestamp: datetime
     """
     try:
         # Step 1: Validate file
@@ -130,19 +144,30 @@ async def process_audio(user_id: str, audio_file: UploadFile) -> dict:
         embedding_time = time.time() - start_time
         logger.info(f"Embedding extraction completed in {embedding_time:.2f}s (shape: {embedding.shape})")
 
-        # Step 5: Classify emotion from embedding
-        logger.info("Classifying emotion from embedding...")
+        # Step 5: Query user feedback count for dual-head classification
+        db = get_database()
+        user_doc = User.get_collection(db).find_one({"_id": ObjectId(user_id)})
+        feedback_count = user_doc.get("feedback_count", 0) if user_doc else 0
+        
+        # Step 6: Classify emotion using dual-head classifier
+        logger.info("Classifying emotion with dual-head classifier...")
         start_time = time.time()
-        emotion_label, confidence = classify_emotion_from_embedding(embedding)
+        prediction = classify_with_dual_heads(embedding, user_id, feedback_count)
         classification_time = time.time() - start_time
-        logger.info(f"Emotion: {emotion_label} ({confidence:.2f}) - Classification time: {classification_time:.2f}s")
+        
+        emotion_label = prediction["emotion"]
+        confidence = prediction["confidence"]
+        logger.info(
+            f"Emotion: {emotion_label} ({confidence:.2f}) - "
+            f"Classification time: {classification_time:.2f}s - "
+            f"Blend weight: {prediction['blend_weight']:.2f}"
+        )
 
-        # Step 6: Transcribe audio
+        # Step 7: Transcribe audio
         logger.info("Transcribing audio...")
         transcription = transcribe_audio(audio_path)
 
-        # Step 7: Store metadata in MongoDB
-        db = get_database()
+        # Step 8: Store metadata in MongoDB
         timestamp_str = datetime.utcnow().isoformat()
         collection_id = f"user_{user_id}_documents"
 
@@ -158,7 +183,7 @@ async def process_audio(user_id: str, audio_file: UploadFile) -> dict:
         result = session_collection.insert_one(session.to_dict())
         session_id = str(result.inserted_id)
 
-        # Step 8: Store in Qdrant vector database
+        # Step 9: Store in Qdrant vector database
         logger.info("Storing in vector database...")
         await store_document(
             user_id=user_id,
@@ -172,7 +197,7 @@ async def process_audio(user_id: str, audio_file: UploadFile) -> dict:
         logger.info("Invalidating query cache for user...")
         await invalidate_user_cache(user_id)
 
-        # Step 9: Store emotion analysis (embedding stored in mfcc_features field)
+        # Step 10: Store emotion analysis (embedding stored in mfcc_features field)
         emotion_analysis = EmotionAnalysis(
             user_id=user_id,
             session_id=session_id,
@@ -185,10 +210,16 @@ async def process_audio(user_id: str, audio_file: UploadFile) -> dict:
 
         logger.info(f"Audio processing completed. Session ID: {session_id}")
 
+        # Return extended response with dual-head prediction metadata
         return {
             "session_id": session_id,
             "emotion": emotion_label,
             "confidence": confidence,
+            "global_emotion": prediction["global_emotion"],
+            "global_confidence": prediction["global_confidence"],
+            "user_emotion": prediction["user_emotion"],
+            "user_confidence": prediction["user_confidence"],
+            "blend_weight": prediction["blend_weight"],
             "transcription": transcription,
             "timestamp": session.timestamp,
         }

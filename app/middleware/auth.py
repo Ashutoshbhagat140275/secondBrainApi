@@ -57,3 +57,36 @@ async def get_current_user_id(
     """Extract user_id from current user"""
     return current_user["user_id"]
 
+
+async def get_current_admin(
+    current_user: dict = Depends(get_current_user)
+) -> dict:
+    """
+    Verify that the current user is an admin.
+    
+    Raises:
+        HTTPException: If user is not an admin
+    
+    Returns:
+        dict: User information with user_id and email
+    """
+    db = get_database()
+    user_collection = User.get_collection(db)
+    
+    try:
+        user = user_collection.find_one({"_id": ObjectId(current_user["user_id"])})
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials"
+        )
+    
+    if user is None or not user.get("is_admin", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required"
+        )
+    
+    return current_user
+
+
