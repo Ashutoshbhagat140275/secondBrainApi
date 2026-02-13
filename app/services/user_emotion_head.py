@@ -25,6 +25,7 @@ from app.services.feature_config import (
     EMOTION_LABELS,
     MODEL_DIR,
 )
+from app.services.user_head_storage import storage_service
 
 logger = logging.getLogger(__name__)
 
@@ -76,10 +77,16 @@ class UserEmotionHead(nn.Module):
 @lru_cache(maxsize=USER_HEAD_CACHE_SIZE)
 def load_user_head(user_id: str) -> Optional[nn.Module]:
     """
-    Load user-specific emotion head from disk with LRU caching.
+    Load user-specific emotion head with MongoDB support.
     
-    This function loads a trained user head from models/user_heads/{user_id}.pt
-    and caches it in memory. The LRU cache automatically evicts least-recently-used
+    This function loads a trained user head from storage with automatic fallback:
+    1. LRU Cache (in-memory, handled by decorator)
+    2. MongoDB (if USE_MONGODB_STORAGE=True)
+    3. Filesystem (fallback)
+    4. None (no model exists)
+    
+    The storage service handles MongoDB/file logic and logs the storage source
+    for monitoring. The LRU cache automatically evicts least-recently-used
     models when the cache size exceeds USER_HEAD_CACHE_SIZE (100 models).
     
     Parameters
@@ -95,10 +102,10 @@ def load_user_head(user_id: str) -> Optional[nn.Module]:
     
     Notes
     -----
-    - Returns None if the model file does not exist (user has not provided
-      sufficient feedback for training yet)
+    - Returns None if the model does not exist in any storage backend
     - The LRU cache keeps up to 100 models in memory for fast inference
     - Models are automatically evicted when cache is full
+    - Storage source is logged by the storage service (cache/MongoDB/file)
     
     Examples
     --------
@@ -107,22 +114,20 @@ def load_user_head(user_id: str) -> Optional[nn.Module]:
     ...     # User has a trained model
     ...     pass
     """
-    # Ensure user_heads directory exists
-    USER_HEADS_DIR.mkdir(parents=True, exist_ok=True)
-    
-    user_model_path = USER_HEADS_DIR / f"{user_id}.pt"
-    
-    if not user_model_path.exists():
-        logger.debug(f"No trained model found for user {user_id} at {user_model_path}")
-        return None
-    
     try:
+        # Load via storage service (handles MongoDB/file fallback logic)
+        state_dict = storage_service.load_model(user_id)
+        
+        if state_dict is None:
+            logger.debug(f"No trained model found for user {user_id}")
+            return None
+        
+        # Create model and load weights
         model = UserEmotionHead(embedding_dim=EMBEDDING_DIM, num_classes=NUM_CLASSES)
-        state = torch.load(str(user_model_path), map_location="cpu", weights_only=True)
-        model.load_state_dict(state)
+        model.load_state_dict(state_dict)
         model.eval()
         
-        logger.info(f"User emotion head loaded for user {user_id} from {user_model_path}")
+        logger.info(f"User emotion head loaded for user {user_id}")
         return model
     
     except Exception as e:
@@ -131,6 +136,37 @@ def load_user_head(user_id: str) -> Optional[nn.Module]:
             exc_info=True
         )
         return None
+
+
+def invalidate_user_cache(user_id: str):
+    """
+    Invalidate LRU cache for a specific user.
+    
+    This function clears the entire LRU cache, forcing all user models to be
+    reloaded from storage on next access. Call this after training or updating
+    a user's model to ensure the cache reflects the latest version.
+    
+    Parameters
+    ----------
+    user_id : str
+        Unique identifier for the user (used for logging only)
+    
+    Notes
+    -----
+    - Python's lru_cache does not support selective invalidation by key
+    - This function clears the entire cache (all 100 cached models)
+    - Models will be reloaded from storage (MongoDB/file) on next access
+    - The cache will repopulate naturally as users make predictions
+    
+    Examples
+    --------
+    >>> # After training a user model
+    >>> train_user_head(user_id="user_123")
+    >>> invalidate_user_cache("user_123")
+    >>> # Next prediction will load the updated model
+    """
+    load_user_head.cache_clear()
+    logger.info(f"Invalidated LRU cache for user {user_id} (entire cache cleared)")
 
 
 def predict_user(embedding: np.ndarray, user_id: str) -> Optional[Tuple[np.ndarray, float]]:

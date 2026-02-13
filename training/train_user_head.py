@@ -29,6 +29,8 @@ Requirements: 6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 7.1, 7.2, 7.3, 7.4, 7.5
 import argparse
 import logging
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Tuple, List
 import numpy as np
@@ -42,8 +44,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.db.mongodb import get_database
 from app.models.feedback import UserFeedback
-from app.services.user_emotion_head import UserEmotionHead, create_fresh_user_head, USER_HEADS_DIR
+from app.services.user_emotion_head import UserEmotionHead, create_fresh_user_head, USER_HEADS_DIR, invalidate_user_cache
+from app.services.user_head_storage import storage_service
 from app.services.feature_config import EMBEDDING_DIM, NUM_CLASSES, EMOTION_LABELS
+from app.config import settings
 
 logging.basicConfig(
     level=logging.INFO,
@@ -247,9 +251,46 @@ def train_user_head(user_id: str, force_retrain: bool = False) -> dict:
                 f"loss={avg_loss:.4f}, accuracy={accuracy:.4f}"
             )
     
-    # Save trained model
-    torch.save(model.state_dict(), str(user_model_path))
-    logger.info(f"Model saved to {user_model_path}")
+    # Save trained model via storage service
+    save_metadata = {
+        "training_samples": num_samples,
+        "last_trained": datetime.utcnow()
+    }
+    
+    # Measure save latency
+    import time
+    save_start = time.time()
+    
+    save_success = storage_service.save_model(
+        user_id=user_id,
+        state_dict=model.state_dict(),
+        metadata=save_metadata
+    )
+    
+    save_latency_ms = (time.time() - save_start) * 1000
+    
+    if not save_success:
+        logger.error(f"Failed to save model for user {user_id}")
+        raise RuntimeError("Model save failed")
+    
+    # Invalidate cache to ensure fresh model is loaded on next prediction
+    invalidate_user_cache(user_id)
+    
+    # Determine storage mode for logging
+    if storage_service.dual_save:
+        storage_mode = "dual"
+        storage_location = "MongoDB and file"
+    elif storage_service.use_mongodb:
+        storage_mode = "mongodb"
+        storage_location = "MongoDB"
+    else:
+        storage_mode = "file"
+        storage_location = "file"
+    
+    logger.info(
+        f"Model saved to {storage_location} for user {user_id} "
+        f"(latency: {save_latency_ms:.2f}ms)"
+    )
     
     # Return training metrics
     return {
@@ -257,7 +298,8 @@ def train_user_head(user_id: str, force_retrain: bool = False) -> dict:
         "final_accuracy": accuracy,
         "num_samples": num_samples,
         "num_epochs": num_epochs,
-        "model_path": str(user_model_path)
+        "storage_mode": storage_mode,
+        "save_latency_ms": save_latency_ms
     }
 
 
@@ -319,8 +361,8 @@ def train_user_head_async(job_id: str, user_id: str, db) -> None:
         update_job_status(db, job_id, "running")
         
         # Determine if this is initial or incremental training
-        user_model_path = USER_HEADS_DIR / f"{user_id}.pt"
-        force_retrain = not user_model_path.exists()
+        # Check storage service for existing model
+        force_retrain = not storage_service.exists(user_id)
         
         # Train the model
         metrics = train_user_head(user_id, force_retrain=force_retrain)
@@ -330,7 +372,8 @@ def train_user_head_async(job_id: str, user_id: str, db) -> None:
         
         logger.info(
             f"Training job {job_id} completed for user {user_id}: "
-            f"loss={metrics['final_loss']:.4f}, accuracy={metrics['final_accuracy']:.4f}"
+            f"loss={metrics['final_loss']:.4f}, accuracy={metrics['final_accuracy']:.4f}, "
+            f"storage_mode={metrics['storage_mode']}"
         )
         
     except Exception as e:

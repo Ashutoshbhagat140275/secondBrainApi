@@ -47,6 +47,11 @@ class Settings(BaseSettings):
     debug: bool = True
     log_level: str = "INFO"
 
+    # User Head Storage (MongoDB Migration)
+    USE_MONGODB_STORAGE: bool = False
+    DUAL_SAVE_MODE: bool = False
+    MONGODB_STORAGE_COMPRESSION: str = "gzip"
+
     class Config:
         env_file = ".env"
         case_sensitive = False

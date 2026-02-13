@@ -40,6 +40,11 @@ async def create_feedback_indexes():
         db.training_jobs.create_index("job_id", unique=True)
         db.training_jobs.create_index([("user_id", 1), ("created_at", -1)])
         logger.info("Created TrainingJob indexes")
+        
+        # UserModelStorage indexes (MongoDB migration)
+        db.user_models.create_index("user_id", unique=True)
+        db.user_models.create_index("updated_at")
+        logger.info("Created UserModelStorage indexes")
     except Exception as e:
         logger.warning(f"Failed to create indexes (may already exist): {e}")
 
