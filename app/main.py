@@ -6,7 +6,14 @@ from app.db.qdrant import connect_to_qdrant
 from app.db.redis import connect_to_redis, close_redis_connection
 from app.services.emotion_analyzer import load_emotion_model
 from app.services.global_emotion_head import load_global_head
-from app.services.feature_config import GLOBAL_HEAD_PATH, USER_HEADS_DIR
+from app.services.feature_config import (
+    GLOBAL_HEAD_PATH,
+    USER_HEADS_DIR,
+    USE_SIGMOID_ALPHA,
+    ALPHA_FEEDBACK_SCALE_K,
+    ALPHA_CONFIDENCE_THRESHOLD_TAU,
+    ALPHA_SIGMOID_SHARPNESS_BETA,
+)
 from app.routers import auth, audio, rag, dashboard, admin
 import logging
 from pathlib import Path
@@ -102,6 +109,15 @@ async def startup_event():
     # Detect and log active model format
     model_format = detect_active_model_format()
     logger.info(f"Emotion model format: {model_format}")
+    
+    # Log alpha engine configuration
+    if USE_SIGMOID_ALPHA:
+        logger.info(
+            f"Alpha Engine: sigmoid (K={ALPHA_FEEDBACK_SCALE_K}, "
+            f"tau={ALPHA_CONFIDENCE_THRESHOLD_TAU}, beta={ALPHA_SIGMOID_SHARPNESS_BETA})"
+        )
+    else:
+        logger.info("Alpha Engine: linear")
     
     # Pre-load emotion models based on detected format
     if model_format in ["dual-head", "global-only"]:

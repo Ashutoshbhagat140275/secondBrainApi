@@ -229,6 +229,277 @@ Key benefits over manual feature extraction:
 - No pitch extraction failures or NaN issues
 - Captures semantic patterns like prosody, rhythm, and speaking style
 
+## Alpha Engine: Dual-Head Blending Strategy
+
+The system uses a **dual-head architecture** that combines predictions from two models:
+- **Global Head**: Trained on all users' data (general emotion patterns)
+- **User Head**: Trained on individual user's feedback (personalized patterns)
+
+The **Alpha Engine** determines how to blend these predictions using a dynamic weight (alpha):
+```
+Final Prediction = alpha × Global Prediction + (1 - alpha) × User Prediction
+```
+
+### Sigmoid vs Linear Formulas
+
+The system supports two blending strategies, controlled by the `USE_SIGMOID_ALPHA` flag in `feature_config.py`.
+
+#### Linear Formula (Legacy)
+
+**Formula:**
+```
+α = 0.5 + 0.3·C_g - 0.2·min(feedback_count/100, 1.0)
+Clamped to [0.3, 1.0]
+```
+
+**Characteristics:**
+- Simple additive combination of confidence and feedback
+- Hard-coded thresholds and clamping
+- Special case: Returns 1.0 for feedback_count < 20
+- Linear decay with feedback count
+
+**When to use:** Stable baseline, well-tested in production
+
+#### Sigmoid Formula (Recommended)
+
+**Formula:**
+```
+alpha_data = 1 / (1 + N/K)
+alpha_conf = 1 / (1 + exp(-β(C_g - τ)))
+alpha = alpha_data × alpha_conf
+```
+
+**Characteristics:**
+- **Separation of concerns**: Data availability (feedback) and confidence are independent
+- **Smooth transitions**: Exponential decay for feedback, S-curve for confidence
+- **Multiplicative logic**: Both components must agree to trust global head
+- **No hard clamping**: Natural bounds from sigmoid function (0, 1)
+- **Tunable**: Three hyperparameters allow fine-grained control
+
+**When to use:** Better personalization, smoother behavior, more intuitive tuning
+
+**Key Differences:**
+
+| Aspect | Linear | Sigmoid |
+|--------|--------|---------|
+| Feedback decay | Linear | Exponential |
+| Confidence response | Linear | S-curve (sigmoid) |
+| Combination | Additive | Multiplicative |
+| Bounds | Hard clamp [0.3, 1.0] | Natural [0, 1] |
+| New user behavior | Always 1.0 (N < 20) | Responds to confidence |
+| Tuning | Fixed coefficients | Three hyperparameters |
+
+### Hyperparameters
+
+The sigmoid formula uses three tunable hyperparameters defined in `app/services/feature_config.py`:
+
+#### K (Feedback Scale Constant)
+
+**Default:** 50
+
+**Effect:** Controls how quickly alpha_data decays as users provide feedback
+
+**Behavior:**
+- At N = 0: alpha_data = 1.0 (no feedback → trust global fully)
+- At N = K: alpha_data = 0.5 (equal weight between global and user)
+- At N = 2K: alpha_data = 0.33 (favor user head)
+- As N → ∞: alpha_data → 0.0 (trust user head only)
+
+**Tuning guide:**
+- **K = 25**: Fast personalization (reaches 50/50 blend at 25 feedback samples)
+- **K = 50**: Medium personalization (default, balanced approach)
+- **K = 100**: Slow personalization (requires more feedback before trusting user head)
+
+**When to adjust:**
+- Increase K if users complain about premature personalization
+- Decrease K if users want faster adaptation to their preferences
+
+#### τ (Tau - Confidence Threshold)
+
+**Default:** 0.6
+
+**Effect:** Sets the confidence level at which alpha_conf = 0.5 (equal weight)
+
+**Behavior:**
+- C_g < τ: alpha_conf < 0.5 (low confidence → favor user head)
+- C_g = τ: alpha_conf = 0.5 (threshold → equal weight)
+- C_g > τ: alpha_conf > 0.5 (high confidence → trust global head)
+
+**Tuning guide:**
+- **τ = 0.5**: Lower threshold (trust global head more easily)
+- **τ = 0.6**: Medium threshold (default, balanced)
+- **τ = 0.7**: Higher threshold (require high confidence to trust global)
+
+**When to adjust:**
+- Decrease τ if global head is well-calibrated and reliable
+- Increase τ if global head tends to be overconfident
+
+#### β (Beta - Sigmoid Sharpness)
+
+**Default:** 10
+
+**Effect:** Controls how steep the sigmoid transition is around τ
+
+**Behavior:**
+- Low β: Gentle, gradual transition (wide confidence range affects alpha)
+- High β: Sharp, decisive transition (narrow confidence range affects alpha)
+
+**Tuning guide:**
+- **β = 5**: Gentle transition (smooth blending across confidence range)
+- **β = 10**: Medium transition (default, balanced)
+- **β = 20**: Sharp transition (decisive switching between heads)
+
+**When to adjust:**
+- Decrease β for smoother, more gradual blending
+- Increase β for more decisive switching based on confidence
+
+### Example Alpha Values
+
+Here are concrete examples showing how alpha behaves under different scenarios:
+
+#### Scenario 1: New User (N = 0 feedback samples)
+
+**Linear formula:**
+```
+alpha = 1.0 (hardcoded for N < 20)
+```
+
+**Sigmoid formula:**
+```
+alpha_data = 1.0 (no feedback)
+
+Low confidence (C_g = 0.5):
+  alpha_conf = 0.27 → alpha = 0.27 (favor user head despite no feedback)
+
+Medium confidence (C_g = 0.7):
+  alpha_conf = 0.73 → alpha = 0.73 (trust global head)
+
+High confidence (C_g = 0.9):
+  alpha_conf = 0.95 → alpha = 0.95 (strongly trust global head)
+```
+
+**Insight:** Sigmoid responds to confidence even for new users, while linear always trusts global.
+
+#### Scenario 2: Medium Feedback (N = 50 samples)
+
+**Linear formula:**
+```
+C_g = 0.5 → alpha = 0.5 + 0.15 - 0.1 = 0.55
+C_g = 0.7 → alpha = 0.5 + 0.21 - 0.1 = 0.61
+C_g = 0.9 → alpha = 0.5 + 0.27 - 0.1 = 0.67
+```
+
+**Sigmoid formula:**
+```
+alpha_data = 0.5 (at threshold K = 50)
+
+C_g = 0.5 → alpha_conf = 0.27 → alpha = 0.14 (strongly favor user)
+C_g = 0.7 → alpha_conf = 0.73 → alpha = 0.37 (favor user)
+C_g = 0.9 → alpha_conf = 0.95 → alpha = 0.48 (nearly equal)
+```
+
+**Insight:** At medium feedback, sigmoid favors user head more aggressively than linear.
+
+#### Scenario 3: High Feedback (N = 100 samples)
+
+**Linear formula:**
+```
+C_g = 0.5 → alpha = 0.5 + 0.15 - 0.2 = 0.45
+C_g = 0.7 → alpha = 0.5 + 0.21 - 0.2 = 0.51
+C_g = 0.9 → alpha = 0.5 + 0.27 - 0.2 = 0.57
+```
+
+**Sigmoid formula:**
+```
+alpha_data = 0.33 (lots of feedback)
+
+C_g = 0.5 → alpha_conf = 0.27 → alpha = 0.09 (strongly favor user)
+C_g = 0.7 → alpha_conf = 0.73 → alpha = 0.24 (favor user)
+C_g = 0.9 → alpha_conf = 0.95 → alpha = 0.31 (still favor user)
+```
+
+**Insight:** With lots of feedback, sigmoid strongly favors user head regardless of confidence.
+
+#### Scenario 4: Edge Case - Very High Confidence, No Feedback
+
+**Linear formula:**
+```
+C_g = 0.95, N = 0 → alpha = 1.0 (hardcoded)
+```
+
+**Sigmoid formula:**
+```
+C_g = 0.95, N = 0:
+  alpha_data = 1.0
+  alpha_conf = 0.98
+  alpha = 0.98 (trust global head)
+```
+
+**Insight:** Both formulas trust global head, but sigmoid is slightly more conservative.
+
+### Configuration and Deployment
+
+#### Enabling Sigmoid Formula
+
+Edit `app/services/feature_config.py`:
+
+```python
+# Alpha Engine Configuration
+USE_SIGMOID_ALPHA = True  # Enable sigmoid formula
+ALPHA_FEEDBACK_SCALE_K = 50
+ALPHA_CONFIDENCE_THRESHOLD_TAU = 0.6
+ALPHA_SIGMOID_SHARPNESS_BETA = 10
+```
+
+#### Monitoring Alpha Values
+
+The API response includes alpha components for debugging:
+
+```json
+{
+  "emotion": "happy",
+  "confidence": 0.85,
+  "blend_weight": 0.42,
+  "alpha_data": 0.67,
+  "alpha_conf": 0.63,
+  "alpha_formula": "sigmoid",
+  "global_emotion": "happy",
+  "global_confidence": 0.72,
+  "user_emotion": "excited",
+  "user_confidence": 0.91
+}
+```
+
+#### Tuning Workflow
+
+1. **Start with defaults:** K=50, τ=0.6, β=10
+2. **Monitor alpha distribution:** Check mean, std, percentiles in logs
+3. **Adjust K** if personalization speed is wrong:
+   - Users complain about slow adaptation → decrease K
+   - Users complain about erratic predictions → increase K
+4. **Adjust τ** if confidence calibration is off:
+   - Global head is reliable but underused → decrease τ
+   - Global head is overconfident → increase τ
+5. **Adjust β** if transitions are too abrupt or too gradual:
+   - Want smoother blending → decrease β
+   - Want more decisive switching → increase β
+
+#### Rollback Plan
+
+If issues arise with sigmoid formula:
+
+1. Set `USE_SIGMOID_ALPHA = False` in `feature_config.py`
+2. Restart the service
+3. System automatically reverts to linear formula
+4. No data loss or API changes required
+
+### Performance Considerations
+
+- Alpha computation adds < 1ms overhead per prediction
+- Sigmoid uses numpy's optimized exp() function
+- All three alpha components are logged at DEBUG level
+- Production deployments should monitor alpha distributions for anomalies
+
 ## Development
 
 ### Running Tests

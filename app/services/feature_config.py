@@ -90,3 +90,117 @@ CREMAD_DIR = TRAINING_DATA_DIR / "crema-d"
 
 # Cached extracted features
 FEATURES_CACHE_DIR = _API_ROOT / "training" / "cache"
+
+# ---------------------------------------------------------------------------
+# Alpha Engine Configuration (Sigmoid-Based Blending)
+# ---------------------------------------------------------------------------
+"""
+Alpha Engine: Sigmoid-based blending weight computation for dual-head system.
+
+The alpha engine computes a blending weight that determines how to combine
+predictions from the global head (trained on public data) and user head
+(personalized on user feedback). The new sigmoid-based formula separates
+data availability concerns from confidence concerns using multiplicative
+combination.
+
+Formula:
+    alpha_data = 1 / (1 + N/K)
+    alpha_conf = 1 / (1 + exp(-β(C_g - τ)))
+    alpha = alpha_data × alpha_conf
+
+Where:
+    N = feedback_count (number of user feedback samples)
+    C_g = global_confidence (global head prediction confidence)
+    K = ALPHA_FEEDBACK_SCALE_K
+    τ = ALPHA_CONFIDENCE_THRESHOLD_TAU
+    β = ALPHA_SIGMOID_SHARPNESS_BETA
+"""
+
+USE_SIGMOID_ALPHA = False
+"""
+Enable sigmoid-based alpha formula (default: False for backward compatibility).
+
+When False: Uses legacy linear formula for alpha computation.
+When True: Uses new sigmoid-based formula with separate data and confidence components.
+
+This flag allows safe deployment and instant rollback without code changes.
+"""
+
+ALPHA_FEEDBACK_SCALE_K = 50
+"""
+Feedback scaling constant K for alpha_data computation (default: 50).
+
+Controls how quickly alpha_data decays as users provide more feedback.
+At N=K feedback samples, alpha_data = 0.5 (equal weight between heads).
+
+Valid range: K > 0
+Typical values:
+    - K=25: Fast decay (personalize quickly)
+    - K=50: Medium decay (balanced) [DEFAULT]
+    - K=100: Slow decay (trust global longer)
+
+Formula: alpha_data = 1 / (1 + N/K)
+"""
+
+ALPHA_CONFIDENCE_THRESHOLD_TAU = 0.6
+"""
+Confidence threshold τ (tau) for sigmoid center point (default: 0.6).
+
+Sets the global confidence level at which alpha_conf = 0.5 (equal weight).
+Below this threshold, the system favors the user head; above it, favors global.
+
+Valid range: 0 < τ < 1
+Typical values:
+    - τ=0.5: Lower threshold (trust global more easily)
+    - τ=0.6: Medium threshold (balanced) [DEFAULT]
+    - τ=0.7: Higher threshold (require high confidence)
+
+Formula: alpha_conf = 1 / (1 + exp(-β(C_g - τ)))
+"""
+
+ALPHA_SIGMOID_SHARPNESS_BETA = 10
+"""
+Sigmoid sharpness parameter β (beta) for alpha_conf transition (default: 10).
+
+Controls how steep the sigmoid transition is around the confidence threshold.
+Higher values create sharper transitions (more decisive switching).
+
+Valid range: β > 0
+Typical values:
+    - β=5: Gentle transition (wide confidence range)
+    - β=10: Medium transition (balanced) [DEFAULT]
+    - β=20: Sharp transition (narrow confidence range)
+
+Formula: alpha_conf = 1 / (1 + exp(-β(C_g - τ)))
+"""
+
+# Validation of alpha engine constants
+def _validate_alpha_config():
+    """
+    Validate alpha engine configuration constants.
+    
+    Raises
+    ------
+    ValueError
+        If any constant is outside its valid range.
+    """
+    if ALPHA_FEEDBACK_SCALE_K <= 0:
+        raise ValueError(
+            f"ALPHA_FEEDBACK_SCALE_K must be > 0, got {ALPHA_FEEDBACK_SCALE_K}"
+        )
+    
+    if not (0 < ALPHA_CONFIDENCE_THRESHOLD_TAU < 1):
+        raise ValueError(
+            f"ALPHA_CONFIDENCE_THRESHOLD_TAU must be in range (0, 1), "
+            f"got {ALPHA_CONFIDENCE_THRESHOLD_TAU}"
+        )
+    
+    if ALPHA_SIGMOID_SHARPNESS_BETA <= 0:
+        raise ValueError(
+            f"ALPHA_SIGMOID_SHARPNESS_BETA must be > 0, "
+            f"got {ALPHA_SIGMOID_SHARPNESS_BETA}"
+        )
+
+
+# Run validation at module import time
+_validate_alpha_config()

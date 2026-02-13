@@ -123,6 +123,9 @@ async def process_audio(user_id: str, audio_file: UploadFile) -> dict:
         - user_emotion: str | None (user head prediction, None if not available)
         - user_confidence: float | None (user head confidence, None if not available)
         - blend_weight: float (alpha value used for blending)
+        - alpha_data: float | None (data-driven alpha component, None if linear formula)
+        - alpha_conf: float | None (confidence-driven alpha component, None if linear formula)
+        - alpha_formula: str (formula used: "sigmoid" or "linear")
         - transcription: str
         - timestamp: datetime
     """
@@ -220,6 +223,9 @@ async def process_audio(user_id: str, audio_file: UploadFile) -> dict:
             "user_emotion": prediction["user_emotion"],
             "user_confidence": prediction["user_confidence"],
             "blend_weight": prediction["blend_weight"],
+            "alpha_data": prediction.get("alpha_data"),
+            "alpha_conf": prediction.get("alpha_conf"),
+            "alpha_formula": prediction["alpha_formula"],
             "transcription": transcription,
             "timestamp": session.timestamp,
         }

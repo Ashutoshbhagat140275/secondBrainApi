@@ -20,69 +20,11 @@ from typing import Dict, Optional
 from app.services.global_emotion_head import predict_global
 from app.services.user_emotion_head import predict_user
 from app.services.feature_config import EMOTION_LABELS
+from app.services.alpha_engine import compute_blend_weight
 
 logger = logging.getLogger(__name__)
 
 
-def compute_blend_weight(global_confidence: float, feedback_count: int) -> float:
-    """
-    Compute adaptive blending weight α for combining global and user predictions.
-    
-    The blending weight determines how much to trust the global head vs the user
-    head. It adapts based on:
-    - Global confidence: Higher confidence → more global weight
-    - Feedback count: More feedback → more user weight
-    
-    Formula:
-        α = 0.5 + 0.3·C_g - 0.2·min(feedback_count/100, 1.0)
-    
-    Special cases:
-        - feedback_count < 20: α = 1.0 (global only, user head not trained yet)
-        - Result clamped to [0.3, 1.0] to ensure both heads contribute when available
-    
-    Parameters
-    ----------
-    global_confidence : float
-        Confidence score from global head (C_g = max(P_g)), range [0, 1]
-    feedback_count : int
-        Number of feedback samples the user has provided
-    
-    Returns
-    -------
-    float
-        Blending weight α in range [0.3, 1.0], where:
-        - α = 1.0: Use only global head
-        - α = 0.5: Equal blend of global and user
-        - α = 0.3: Favor user head (minimum global contribution)
-    
-    Examples
-    --------
-    >>> compute_blend_weight(0.7, 10)  # New user, not enough feedback
-    1.0
-    >>> compute_blend_weight(0.7, 50)  # Medium feedback, good confidence
-    0.61
-    >>> compute_blend_weight(0.5, 100)  # Lots of feedback, low confidence
-    0.45
-    >>> compute_blend_weight(0.9, 100)  # Lots of feedback, high confidence
-    0.57
-    
-    Notes
-    -----
-    The formula balances three factors:
-    1. Base weight (0.5): Start with equal blend
-    2. Confidence boost (+0.3·C_g): Trust global more when confident
-    3. Feedback penalty (-0.2·min(feedback/100, 1.0)): Trust user more with experience
-    """
-    # Require minimum 20 feedback samples before using user head
-    if feedback_count < 20:
-        return 1.0
-    
-    # Compute adaptive weight
-    feedback_factor = min(feedback_count / 100.0, 1.0)
-    alpha = 0.5 + 0.3 * global_confidence - 0.2 * feedback_factor
-    
-    # Clamp to [0.3, 1.0] to ensure both heads contribute
-    return max(0.3, min(1.0, alpha))
 
 
 def blend_predictions(
@@ -206,8 +148,9 @@ def classify_with_dual_heads(
     # Step 2: Try to get user head prediction
     user_result = predict_user(embedding, user_id)
     
-    # Step 3: Compute blending weight
-    alpha = compute_blend_weight(C_g, feedback_count)
+    # Step 3: Compute blending weight using alpha engine
+    alpha_result = compute_blend_weight(C_g, feedback_count, user_id=user_id)
+    alpha = alpha_result["alpha"]
     
     # Step 4: Blend predictions if user head is available
     if user_result is not None:
@@ -238,6 +181,9 @@ def classify_with_dual_heads(
             "user_emotion": user_emotion,
             "user_confidence": float(C_u),
             "blend_weight": alpha,
+            "alpha_data": alpha_result.get("alpha_data"),
+            "alpha_conf": alpha_result.get("alpha_conf"),
+            "alpha_formula": alpha_result["formula"],
             "probabilities": probabilities,
         }
     
@@ -259,5 +205,8 @@ def classify_with_dual_heads(
             "user_emotion": None,
             "user_confidence": None,
             "blend_weight": 1.0,  # Global only
+            "alpha_data": None,
+            "alpha_conf": None,
+            "alpha_formula": "linear",
             "probabilities": probabilities,
         }

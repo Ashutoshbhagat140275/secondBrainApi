@@ -35,6 +35,9 @@ def test_audio_upload_response_with_global_only():
         user_emotion=None,
         user_confidence=None,
         blend_weight=1.0,
+        alpha_data=None,
+        alpha_conf=None,
+        alpha_formula="linear",
         transcription="I'm feeling great today!",
         timestamp=datetime.utcnow()
     )
@@ -53,6 +56,11 @@ def test_audio_upload_response_with_global_only():
     
     # Verify blend weight is 1.0 (global only)
     assert response.blend_weight == 1.0
+    
+    # Verify alpha fields (linear formula)
+    assert response.alpha_data is None
+    assert response.alpha_conf is None
+    assert response.alpha_formula == "linear"
     
     # Verify backward compatibility fields
     assert response.transcription == "I'm feeling great today!"
@@ -74,6 +82,9 @@ def test_audio_upload_response_with_dual_heads():
         user_emotion="happy",
         user_confidence=0.95,
         blend_weight=0.55,
+        alpha_data=None,
+        alpha_conf=None,
+        alpha_formula="linear",
         transcription="This is amazing!",
         timestamp=datetime.utcnow()
     )
@@ -110,6 +121,7 @@ def test_audio_upload_response_disagreement():
         user_emotion="sad",
         user_confidence=0.85,
         blend_weight=0.40,
+        alpha_formula="linear",
         transcription="I'm not sure how I feel",
         timestamp=datetime.utcnow()
     )
@@ -137,6 +149,7 @@ def test_audio_upload_response_backward_compatibility():
         user_emotion=None,
         user_confidence=None,
         blend_weight=1.0,
+        alpha_formula="linear",
         transcription="Test transcription",
         timestamp=datetime.utcnow()
     )
@@ -171,6 +184,7 @@ def test_audio_upload_response_all_extended_fields():
         user_emotion="angry",
         user_confidence=0.82,
         blend_weight=0.60,
+        alpha_formula="linear",
         transcription="This is frustrating",
         timestamp=datetime.utcnow()
     )
@@ -207,6 +221,7 @@ def test_audio_upload_response_required_fields():
             user_emotion=None,
             user_confidence=None,
             blend_weight=1.0,
+            alpha_formula="linear",
             transcription="Test",
             timestamp=datetime.utcnow()
         )
@@ -222,6 +237,7 @@ def test_audio_upload_response_required_fields():
             user_emotion=None,
             user_confidence=None,
             # blend_weight missing
+            alpha_formula="linear",
             transcription="Test",
             timestamp=datetime.utcnow()
         )
@@ -243,6 +259,7 @@ def test_audio_upload_response_optional_user_fields():
         user_emotion=None,
         user_confidence=None,
         blend_weight=1.0,
+        alpha_formula="linear",
         transcription="Test",
         timestamp=datetime.utcnow()
     )
@@ -260,6 +277,7 @@ def test_audio_upload_response_optional_user_fields():
         user_emotion="happy",
         user_confidence=0.92,
         blend_weight=0.50,
+        alpha_formula="linear",
         transcription="Test",
         timestamp=datetime.utcnow()
     )
@@ -283,6 +301,9 @@ def test_audio_upload_response_serialization():
         user_emotion="happy",
         user_confidence=0.90,
         blend_weight=0.55,
+        alpha_data=0.67,
+        alpha_conf=0.82,
+        alpha_formula="sigmoid",
         transcription="Great day!",
         timestamp=datetime.utcnow()
     )
@@ -299,6 +320,9 @@ def test_audio_upload_response_serialization():
     assert "user_emotion" in response_dict
     assert "user_confidence" in response_dict
     assert "blend_weight" in response_dict
+    assert "alpha_data" in response_dict
+    assert "alpha_conf" in response_dict
+    assert "alpha_formula" in response_dict
     assert "transcription" in response_dict
     assert "timestamp" in response_dict
     
@@ -306,6 +330,9 @@ def test_audio_upload_response_serialization():
     assert response_dict["global_emotion"] == "happy"
     assert response_dict["user_emotion"] == "happy"
     assert response_dict["blend_weight"] == 0.55
+    assert response_dict["alpha_data"] == 0.67
+    assert response_dict["alpha_conf"] == 0.82
+    assert response_dict["alpha_formula"] == "sigmoid"
 
 
 def test_audio_upload_response_confidence_ranges():
@@ -323,6 +350,7 @@ def test_audio_upload_response_confidence_ranges():
         user_emotion="happy",
         user_confidence=0.90,
         blend_weight=0.55,
+        alpha_formula="linear",
         transcription="Test",
         timestamp=datetime.utcnow()
     )
@@ -352,6 +380,7 @@ def test_audio_upload_response_blend_weight_semantics():
         user_emotion=None,
         user_confidence=None,
         blend_weight=1.0,
+        alpha_formula="linear",
         transcription="Test",
         timestamp=datetime.utcnow()
     )
@@ -368,8 +397,67 @@ def test_audio_upload_response_blend_weight_semantics():
         user_emotion="happy",
         user_confidence=0.95,
         blend_weight=0.55,
+        alpha_formula="linear",
         transcription="Test",
         timestamp=datetime.utcnow()
     )
     assert 0.3 <= blended.blend_weight < 1.0
     assert blended.user_emotion is not None
+
+
+def test_audio_upload_response_sigmoid_alpha_fields():
+    """
+    Test new alpha fields for sigmoid formula.
+    
+    Requirements: 5.5, 7.2
+    """
+    # Test with sigmoid formula (alpha components present)
+    sigmoid_response = AudioUploadResponse(
+        session_id="507f1f77bcf86cd799439011",
+        emotion="happy",
+        confidence=0.88,
+        global_emotion="happy",
+        global_confidence=0.82,
+        user_emotion="happy",
+        user_confidence=0.95,
+        blend_weight=0.55,
+        alpha_data=0.67,
+        alpha_conf=0.82,
+        alpha_formula="sigmoid",
+        transcription="Test",
+        timestamp=datetime.utcnow()
+    )
+    
+    # Verify sigmoid-specific fields
+    assert sigmoid_response.alpha_formula == "sigmoid"
+    assert sigmoid_response.alpha_data == 0.67
+    assert sigmoid_response.alpha_conf == 0.82
+    assert 0.0 <= sigmoid_response.alpha_data <= 1.0
+    assert 0.0 <= sigmoid_response.alpha_conf <= 1.0
+    
+    # Test with linear formula (alpha components None)
+    linear_response = AudioUploadResponse(
+        session_id="507f1f77bcf86cd799439011",
+        emotion="happy",
+        confidence=0.85,
+        global_emotion="happy",
+        global_confidence=0.85,
+        user_emotion=None,
+        user_confidence=None,
+        blend_weight=1.0,
+        alpha_data=None,
+        alpha_conf=None,
+        alpha_formula="linear",
+        transcription="Test",
+        timestamp=datetime.utcnow()
+    )
+    
+    # Verify linear formula has None alpha components
+    assert linear_response.alpha_formula == "linear"
+    assert linear_response.alpha_data is None
+    assert linear_response.alpha_conf is None
+    
+    # Verify backward compatibility - alpha fields are optional
+    assert hasattr(linear_response, "alpha_data")
+    assert hasattr(linear_response, "alpha_conf")
+    assert hasattr(linear_response, "alpha_formula")

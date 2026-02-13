@@ -10,7 +10,7 @@ class AudioUploadResponse(BaseModel):
     Includes both final blended prediction and individual head predictions
     from the dual-head emotion classification system.
     
-    Requirements: 8.1, 8.2, 8.3, 8.4, 8.5
+    Requirements: 5.5, 7.2, 8.1, 8.2, 8.3, 8.4, 8.5
     """
     session_id: str
     emotion: str = Field(..., description="Final blended emotion prediction")
@@ -20,6 +20,9 @@ class AudioUploadResponse(BaseModel):
     user_emotion: Optional[str] = Field(None, description="User head emotion prediction (None if not available)")
     user_confidence: Optional[float] = Field(None, description="User head confidence score (None if not available)")
     blend_weight: float = Field(..., description="Blending weight alpha used (1.0 = global only, <1.0 = blended)")
+    alpha_data: Optional[float] = Field(None, description="Data-driven alpha component based on feedback count (sigmoid formula only)")
+    alpha_conf: Optional[float] = Field(None, description="Confidence-driven alpha component based on global head confidence (sigmoid formula only)")
+    alpha_formula: str = Field(..., description="Alpha computation formula used: 'sigmoid' or 'linear'")
     transcription: str
     timestamp: datetime
 

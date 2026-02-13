@@ -253,3 +253,119 @@ class TestStartupModelPreloading:
             # Should not crash, should fall back to legacy
             assert "Failed to load global emotion head" in caplog.text
             assert "Legacy emotion model loaded successfully (fallback)" in caplog.text
+
+
+class TestAlphaEngineStartupLogging:
+    """Test alpha engine configuration logging during startup."""
+    
+    @pytest.mark.asyncio
+    async def test_logs_sigmoid_alpha_with_parameters(self, caplog):
+        """Should log sigmoid formula with K, tau, beta when USE_SIGMOID_ALPHA=True."""
+        import logging
+        caplog.set_level(logging.INFO)
+        
+        with patch("app.main.detect_active_model_format") as mock_detect, \
+             patch("app.main.load_global_head") as mock_load_global, \
+             patch("app.main.connect_to_mongo"), \
+             patch("app.main.connect_to_qdrant"), \
+             patch("app.main.connect_to_redis"), \
+             patch("app.main.USE_SIGMOID_ALPHA", True), \
+             patch("app.main.ALPHA_FEEDBACK_SCALE_K", 50), \
+             patch("app.main.ALPHA_CONFIDENCE_THRESHOLD_TAU", 0.6), \
+             patch("app.main.ALPHA_SIGMOID_SHARPNESS_BETA", 10), \
+             patch("app.main.USER_HEADS_DIR") as mock_user_dir:
+            
+            mock_detect.return_value = "global-only"
+            mock_load_global.return_value = True
+            mock_user_dir.glob.return_value = []
+            
+            from app.main import startup_event
+            await startup_event()
+            
+            # Verify alpha engine configuration is logged
+            assert "Alpha Engine: sigmoid (K=50, tau=0.6, beta=10)" in caplog.text
+    
+    @pytest.mark.asyncio
+    async def test_logs_linear_alpha_when_disabled(self, caplog):
+        """Should log linear formula when USE_SIGMOID_ALPHA=False."""
+        import logging
+        caplog.set_level(logging.INFO)
+        
+        with patch("app.main.detect_active_model_format") as mock_detect, \
+             patch("app.main.load_global_head") as mock_load_global, \
+             patch("app.main.connect_to_mongo"), \
+             patch("app.main.connect_to_qdrant"), \
+             patch("app.main.connect_to_redis"), \
+             patch("app.main.USE_SIGMOID_ALPHA", False), \
+             patch("app.main.USER_HEADS_DIR") as mock_user_dir:
+            
+            mock_detect.return_value = "global-only"
+            mock_load_global.return_value = True
+            mock_user_dir.glob.return_value = []
+            
+            from app.main import startup_event
+            await startup_event()
+            
+            # Verify alpha engine configuration is logged
+            assert "Alpha Engine: linear" in caplog.text
+    
+    @pytest.mark.asyncio
+    async def test_logs_custom_sigmoid_parameters(self, caplog):
+        """Should log custom hyperparameters when configured."""
+        import logging
+        caplog.set_level(logging.INFO)
+        
+        with patch("app.main.detect_active_model_format") as mock_detect, \
+             patch("app.main.load_global_head") as mock_load_global, \
+             patch("app.main.connect_to_mongo"), \
+             patch("app.main.connect_to_qdrant"), \
+             patch("app.main.connect_to_redis"), \
+             patch("app.main.USE_SIGMOID_ALPHA", True), \
+             patch("app.main.ALPHA_FEEDBACK_SCALE_K", 100), \
+             patch("app.main.ALPHA_CONFIDENCE_THRESHOLD_TAU", 0.7), \
+             patch("app.main.ALPHA_SIGMOID_SHARPNESS_BETA", 20), \
+             patch("app.main.USER_HEADS_DIR") as mock_user_dir:
+            
+            mock_detect.return_value = "dual-head"
+            mock_load_global.return_value = True
+            mock_user_dir.glob.return_value = [Path("user1.pt")]
+            
+            from app.main import startup_event
+            await startup_event()
+            
+            # Verify custom parameters are logged correctly
+            assert "Alpha Engine: sigmoid (K=100, tau=0.7, beta=20)" in caplog.text
+    
+    @pytest.mark.asyncio
+    async def test_alpha_logging_occurs_before_model_loading(self, caplog):
+        """Should log alpha engine configuration before model loading messages."""
+        import logging
+        caplog.set_level(logging.INFO)
+        
+        with patch("app.main.detect_active_model_format") as mock_detect, \
+             patch("app.main.load_global_head") as mock_load_global, \
+             patch("app.main.connect_to_mongo"), \
+             patch("app.main.connect_to_qdrant"), \
+             patch("app.main.connect_to_redis"), \
+             patch("app.main.USE_SIGMOID_ALPHA", True), \
+             patch("app.main.ALPHA_FEEDBACK_SCALE_K", 50), \
+             patch("app.main.ALPHA_CONFIDENCE_THRESHOLD_TAU", 0.6), \
+             patch("app.main.ALPHA_SIGMOID_SHARPNESS_BETA", 10), \
+             patch("app.main.USER_HEADS_DIR") as mock_user_dir:
+            
+            mock_detect.return_value = "global-only"
+            mock_load_global.return_value = True
+            mock_user_dir.glob.return_value = []
+            
+            from app.main import startup_event
+            await startup_event()
+            
+            # Find positions of log messages
+            log_text = caplog.text
+            alpha_pos = log_text.find("Alpha Engine:")
+            model_pos = log_text.find("Global emotion head preloaded")
+            
+            # Alpha logging should come before model loading
+            assert alpha_pos > 0, "Alpha Engine log not found"
+            assert model_pos > 0, "Model loading log not found"
+            assert alpha_pos < model_pos, "Alpha Engine should be logged before model loading"
