@@ -18,9 +18,30 @@ async def connect_to_mongo():
         # Test connection
         client.admin.command('ping')
         logger.info("Connected to MongoDB")
+        
+        # Create indexes for feedback loop personalization
+        await create_feedback_indexes()
     except Exception as e:
         logger.error(f"Failed to connect to MongoDB: {e}")
         raise
+
+
+async def create_feedback_indexes():
+    """Create database indexes for feedback loop and training jobs"""
+    try:
+        # UserFeedback indexes
+        db.user_feedback.create_index("user_id")
+        db.user_feedback.create_index("timestamp")
+        db.user_feedback.create_index([("user_id", 1), ("timestamp", 1)])
+        logger.info("Created UserFeedback indexes")
+        
+        # TrainingJob indexes
+        db.training_jobs.create_index("user_id")
+        db.training_jobs.create_index("job_id", unique=True)
+        db.training_jobs.create_index([("user_id", 1), ("created_at", -1)])
+        logger.info("Created TrainingJob indexes")
+    except Exception as e:
+        logger.warning(f"Failed to create indexes (may already exist): {e}")
 
 
 async def close_mongo_connection():

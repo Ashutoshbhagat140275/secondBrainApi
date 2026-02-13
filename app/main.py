@@ -14,7 +14,7 @@ from app.services.feature_config import (
     ALPHA_CONFIDENCE_THRESHOLD_TAU,
     ALPHA_SIGMOID_SHARPNESS_BETA,
 )
-from app.routers import auth, audio, rag, dashboard, admin
+from app.routers import auth, audio, rag, dashboard, admin, feedback
 import logging
 from pathlib import Path
 
@@ -47,6 +47,7 @@ app.include_router(audio.router)
 app.include_router(rag.router)
 app.include_router(dashboard.router)
 app.include_router(admin.router)
+app.include_router(feedback.router)
 
 
 def detect_active_model_format() -> str:

@@ -204,3 +204,67 @@ def _validate_alpha_config():
 
 # Run validation at module import time
 _validate_alpha_config()
+
+# ---------------------------------------------------------------------------
+# Training Configuration (Feedback Loop & Personalization Engine)
+# ---------------------------------------------------------------------------
+"""
+Training configuration for user-specific emotion head training.
+
+These constants control when training is triggered and how models are trained
+on user feedback data.
+"""
+
+MIN_FEEDBACK_FOR_TRAINING = 20
+"""
+Minimum number of feedback samples required to trigger initial training.
+
+Users must provide at least this many corrections before their first
+personalized model is trained.
+"""
+
+INCREMENTAL_TRAINING_INTERVAL = 10
+"""
+Interval for incremental training after initial training.
+
+After the first training at MIN_FEEDBACK_FOR_TRAINING samples,
+subsequent training occurs every INCREMENTAL_TRAINING_INTERVAL samples.
+
+Example: With MIN=20 and INTERVAL=10, training occurs at 20, 30, 40, 50, etc.
+"""
+
+TRAINING_EPOCHS = 20
+"""
+Number of training epochs for user head training.
+
+Optimized for small datasets (20-100 samples) to prevent overfitting.
+"""
+
+TRAINING_BATCH_SIZE = 16
+"""
+Batch size for user head training.
+
+If the dataset has fewer than 16 samples, the full dataset is used as one batch.
+"""
+
+TRAINING_LEARNING_RATE = 1e-3
+"""
+Learning rate for Adam optimizer during user head training.
+"""
+
+TRAINING_WEIGHT_DECAY = 1e-4
+"""
+Weight decay (L2 regularization) for Adam optimizer.
+
+Helps prevent overfitting on small user feedback datasets.
+"""
+
+# Performance targets (for monitoring and testing)
+FEEDBACK_RESPONSE_TIMEOUT_MS = 100
+"""Target response time for feedback submission endpoint (milliseconds)."""
+
+TRAINING_TIMEOUT_MINUTES = 5
+"""Maximum allowed time for a training job to complete (minutes)."""
+
+MAX_CONCURRENT_TRAINING_JOBS = 10
+"""Maximum number of training jobs that can run simultaneously."""

@@ -296,6 +296,54 @@ def incremental_train_user_head(user_id: str) -> dict:
     return train_user_head(user_id, force_retrain=False)
 
 
+def train_user_head_async(job_id: str, user_id: str, db) -> None:
+    """
+    Async wrapper for training user head (called by background worker).
+    
+    This function is designed to be called by the background task queue.
+    It handles job status updates, error handling, and metrics reporting.
+    
+    Parameters:
+        job_id: Training job identifier (UUID string)
+        user_id: User identifier
+        db: MongoDB database instance
+    
+    Requirements: 4.2, 4.3, 8.1, 8.4, 8.5, 12.4
+    """
+    from app.services.training_job_tracker import update_job_status
+    
+    logger.info(f"Training job {job_id} started for user {user_id}")
+    
+    try:
+        # Update job status to running
+        update_job_status(db, job_id, "running")
+        
+        # Determine if this is initial or incremental training
+        user_model_path = USER_HEADS_DIR / f"{user_id}.pt"
+        force_retrain = not user_model_path.exists()
+        
+        # Train the model
+        metrics = train_user_head(user_id, force_retrain=force_retrain)
+        
+        # Update job status to completed with metrics
+        update_job_status(db, job_id, "completed", metrics=metrics)
+        
+        logger.info(
+            f"Training job {job_id} completed for user {user_id}: "
+            f"loss={metrics['final_loss']:.4f}, accuracy={metrics['final_accuracy']:.4f}"
+        )
+        
+    except Exception as e:
+        # Update job status to failed with error message
+        error_msg = str(e)
+        update_job_status(db, job_id, "failed", error_message=error_msg)
+        
+        logger.error(
+            f"Training job {job_id} failed for user {user_id}: {error_msg}",
+            exc_info=True
+        )
+
+
 def main():
     """
     CLI interface for user head training.

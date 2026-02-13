@@ -11,10 +11,11 @@ Key responsibilities:
 - Store feedback in UserFeedback collection
 - Track user feedback counts
 - Determine when to trigger user head training
+- Enqueue training jobs via task queue
 """
 
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from datetime import datetime
 from bson import ObjectId
 
@@ -22,17 +23,64 @@ from app.models.feedback import UserFeedback
 from app.models.user import User
 from app.models.emotion import EmotionAnalysis
 from app.models.audio import AudioSession
-from app.services.feature_config import EMOTION_LABELS
+from app.services.feature_config import (
+    EMOTION_LABELS,
+    MIN_FEEDBACK_FOR_TRAINING,
+    INCREMENTAL_TRAINING_INTERVAL,
+)
+from app.services.task_queue import TaskQueue
+from app.services.training_job_tracker import create_training_job
 
 
 logger = logging.getLogger(__name__)
+
+
+def should_trigger_training(feedback_count: int) -> bool:
+    """
+    Determine if training should be triggered based on feedback count.
+    
+    Training triggers at:
+    - Initial training: feedback_count == MIN_FEEDBACK_FOR_TRAINING (20)
+    - Incremental training: feedback_count >= 20 and feedback_count % INCREMENTAL_TRAINING_INTERVAL == 0
+    
+    Parameters:
+        feedback_count: Current number of feedback samples for the user
+    
+    Returns:
+        True if training should be triggered, False otherwise
+    
+    Requirements: 3.1, 3.2
+    """
+    return (
+        feedback_count >= MIN_FEEDBACK_FOR_TRAINING and
+        feedback_count % INCREMENTAL_TRAINING_INTERVAL == 0
+    )
+
+
+def calculate_samples_until_training(feedback_count: int) -> int:
+    """
+    Calculate how many more samples are needed until next training.
+    
+    Parameters:
+        feedback_count: Current number of feedback samples
+    
+    Returns:
+        Number of samples until next training trigger
+    
+    Requirements: 3.4
+    """
+    if feedback_count < MIN_FEEDBACK_FOR_TRAINING:
+        return MIN_FEEDBACK_FOR_TRAINING - feedback_count
+    else:
+        return INCREMENTAL_TRAINING_INTERVAL - (feedback_count % INCREMENTAL_TRAINING_INTERVAL)
 
 
 def submit_feedback(
     db,
     user_id: str,
     session_id: str,
-    corrected_emotion: str
+    corrected_emotion: str,
+    task_queue: Optional[TaskQueue] = None
 ) -> Dict[str, Any]:
     """
     Submit user feedback for emotion correction.
@@ -130,33 +178,42 @@ def submit_feedback(
     feedback_count = User.increment_feedback_count(db, user_oid)
     
     # Determine if training should be triggered
-    # Training triggers at 20 feedback samples, then every 10 samples thereafter
-    training_triggered = (
-        feedback_count >= 20 and
-        feedback_count % 10 == 0
-    )
+    training_triggered = should_trigger_training(feedback_count)
+    
+    # Prepare response
+    response = {
+        "status": "success",
+        "feedback_count": feedback_count,
+        "training_triggered": training_triggered,
+    }
     
     if training_triggered:
         logger.info(
             f"Training threshold reached for user {user_id}: "
             f"{feedback_count} feedback samples"
         )
-        message = (
+        
+        # Enqueue training job if task queue is provided
+        if task_queue is not None:
+            from training.train_user_head import train_user_head_async
+            
+            job_id = task_queue.enqueue(train_user_head_async, user_id=user_id, db=db)
+            
+            # Create training job record
+            create_training_job(db, user_id, job_id)
+            
+            response["training_job_id"] = job_id
+            logger.info(f"Training job enqueued: job_id={job_id}, user_id={user_id}")
+        
+        response["message"] = (
             f"Feedback recorded ({feedback_count} total). "
             f"Your personalized model is being updated."
         )
     else:
-        samples_until_training = 20 - feedback_count if feedback_count < 20 else (
-            10 - (feedback_count % 10)
-        )
-        message = (
+        samples_until_training = calculate_samples_until_training(feedback_count)
+        response["message"] = (
             f"Feedback recorded ({feedback_count} total). "
             f"{samples_until_training} more samples until next model update."
         )
     
-    return {
-        "status": "success",
-        "feedback_count": feedback_count,
-        "training_triggered": training_triggered,
-        "message": message
-    }
+    return response
