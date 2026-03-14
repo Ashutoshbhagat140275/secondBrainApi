@@ -293,7 +293,6 @@ def train(
         mode="min",
         factor=0.5,
         patience=5,
-        verbose=True,
     )
 
     # ── training loop ─────────────────────────────────────────────────
